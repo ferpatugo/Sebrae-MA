@@ -1,0 +1,746 @@
+---
+title: "Modelo preditivo de classificação de empresas baixadas por porte - 2014 a 2024  - Dados Receita Federal do Brasil"
+author: "Thiago Marques"
+date: "2024-09-22"
+output: rmdformats::readthedown
+highlight: kate
+css: StyleClube2.css
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(warning = FALSE, message = FALSE)
+knitr::opts_knit$set(root.dir = "C:/Users/teste/Desktop/SEBRAE")
+```
+
+```{r echo=FALSE, fig.align="center", out.width="80%"}
+knitr::include_graphics("C:/Users/teste/Desktop/SEBRAE/images.png")
+```  
+
+
+```{r include=FALSE}
+#devtools::install_github("brisneve/ggplottimeseries")
+options(scipen = 9999)
+vetor_pacotes = c(
+  "arrow",
+  "ggplot2",
+  "plotly",
+  "e1071",
+  "dplyr",
+  "Hmisc",
+  "DescTools",
+  "naniar",
+#  "esquisse",
+  "gridExtra",
+  "kableExtra",
+  "lubridate",
+  "stringr",
+  "rattle",
+#  "ggpmisc",
+  "summarytools",
+  "scales",
+ "ggpmisc",
+ "PreProcess",
+ "glmnet",
+  "pROC",
+  "caret",
+  "tidymodels",
+  "yardstick",
+  "parsnip",
+  "partykit",
+  "baguette",
+  "ranger",
+  "kknn",
+  "xgboost",
+  "ggplottimeseries",
+  "tsibble",
+  "feasts",
+  "vip"
+#  "igraph",
+#  "ggnetwork",
+#  "intergraph",
+#  "ITNr",
+#  "ggpubr"
+  
+)
+#install.packages(vetor_pacotes)
+lapply(vetor_pacotes, require, character.only = TRUE)
+
+```
+
+# Carregando o banco de dados
+
+```{r include=T}
+dados_parquet_BRF = arrow::read_parquet("BRF_FINAL 1 (1).parquet")
+```
+
+```{r include=T}
+dados_parquet_BRF_filtrado = dados_parquet_BRF %>%  select ( MATRIZ,
+                            NOME_F,
+                            SIT_CAD,
+                            DATA_SIT_CAD,
+                            MOT_SIT_CAD,
+                            DATA_INICIO_ATV,
+                            CNAE_PRINC,
+                            CNAE_SEC,
+                            MUNIC,
+                            SIT_ESP,
+                            DATA_SIT_ESP,
+                            CNPJ,
+                            RAZAO_SOCIAL,
+                            NATUREZA_JURIDICA,
+                            CAPITAL_SOCIAL,
+                            PORTE,
+                            OP_SIMPLES,
+                            DT_OP_SIMPLES,
+                            OP_MEI,
+                            DT_OP_MEI,
+                            DT_EX_SIMPLES,
+                            DT_EX_MEI,
+                            code_muni,
+                            PUBLICO_SEBRAE
+                            )
+
+#dados_parquet_SOCIOS_filtrado = dados_parquet_SOCIOS %>% select( CNPJ_BAS,
+                                                              #IDENTIFICADOR_DE_SÓCIO,
+                                                           #DATA_DE_ENTRADA_SOCIEDADE)
+
+#transformando o campo CNPJ de 8 dígitos
+dados_parquet_BRF_filtrado$CNPJ_BAS = str_sub(dados_parquet_BRF_filtrado$CNPJ,1,8) 
+
+```
+
+# Transformação das variáveis de data e rótulos
+
+```{r}
+dados_parquet_BRF_filtrado$ANO_DATA_INICIO_ATV = Year(dados_parquet_BRF_filtrado$DATA_INICIO_ATV)
+
+dados_parquet_BRF_filtrado$MES_DATA_INICIO_ATV = Month(dados_parquet_BRF_filtrado$DATA_INICIO_ATV)
+
+dados_parquet_BRF_filtrado$DIA_DATA_INICIO_ATV = day(dados_parquet_BRF_filtrado$DATA_INICIO_ATV)
+
+dados_parquet_BRF_filtrado = dados_parquet_BRF_filtrado %>% mutate(SIT_CAD_ROTULADA = case_when( 
+  
+     SIT_CAD == 1 ~ "Nula",
+                                                                    SIT_CAD == 2 ~ "Ativa",
+                                                                    SIT_CAD == 3 ~ "Suspensa",
+                                                                    SIT_CAD == 4 ~ "Inapta",
+                                                                    SIT_CAD == 8 ~ "Baixada"
+))
+
+dados_parquet_BRF_filtrado = dados_parquet_BRF_filtrado %>% mutate(MATRIZ_ROTULADA = case_when( 
+  
+     MATRIZ == 1 ~ "Matriz",
+                                                                           MATRIZ == 2 ~ "Filial"
+                                                                  
+))
+
+dados_parquet_BRF_filtrado = dados_parquet_BRF_filtrado %>% mutate(OP_SIMPLES_ROTULADA = case_when( 
+  
+     OP_SIMPLES == 0 ~ "Não",
+                                                                         OP_SIMPLES == 1 ~ "Sim"
+     
+                                                                  
+))
+
+dados_parquet_BRF_filtrado = dados_parquet_BRF_filtrado %>% mutate(OP_MEI_ROTULADA = case_when( 
+  
+     OP_MEI == 0 ~ "Não",
+                                                                                   OP_MEI == 1 ~ "Sim"
+     
+                                                                  
+))
+
+dados_parquet_BRF_filtrado = dados_parquet_BRF_filtrado %>% mutate(PUBLICO_SEBRAE_ROTULADA = case_when( 
+  
+     PUBLICO_SEBRAE == 0 ~ "Não",
+                                                                                   PUBLICO_SEBRAE == 1 ~ "Sim"
+     
+                                                                  
+))
+
+dados_parquet_BRF_filtrado = dados_parquet_BRF_filtrado %>% mutate(PORTE_ROTULADA = case_when( 
+  
+     PORTE == 1 ~ "MEI",
+                                                                           
+     PORTE == 2 ~ "ME",
+     
+     PORTE == 3 ~ "EPP",
+     
+     PORTE == 4 ~ "Demais"
+     
+                                                                  
+))
+
+
+dados_parquet_BRF_filtrado$CAPITAL_SOCIAL_NUMERO = as.numeric(gsub(",",".",dados_parquet_BRF_filtrado$CAPITAL_SOCIAL))
+
+#PEGAR AS CNAES PRINCIPAIS E CLASSIFICAR 
+
+dados_parquet_BRF_filtrado$CNAE_PRINC_2DIGITOS = as.numeric(str_sub(dados_parquet_BRF_filtrado$CNAE_PRINC,1,2)) 
+
+dados_parquet_BRF_filtrado = dados_parquet_BRF_filtrado %>% mutate(CNAE_PRINC_2DIGITOS_ROTULADA = case_when( 
+  
+     (CNAE_PRINC_2DIGITOS >= 1 & CNAE_PRINC_2DIGITOS <= 3) ~ "Agricultura, pecuária, produção florestal, pesca e aqüicultura",
+                                                                           
+     (CNAE_PRINC_2DIGITOS >= 5 & CNAE_PRINC_2DIGITOS <= 9) ~ "Indústrias extrativas",
+     
+     (CNAE_PRINC_2DIGITOS >= 10 & CNAE_PRINC_2DIGITOS <= 33) ~ "Indústrias de transformação",
+     
+     CNAE_PRINC_2DIGITOS == 35 ~ "Eletricidade e gás",
+      
+     (CNAE_PRINC_2DIGITOS >= 36 & CNAE_PRINC_2DIGITOS <= 39) ~ "Água, esgoto, atividades de gestão de resíduos e descontaminação",
+      
+     (CNAE_PRINC_2DIGITOS >= 41 & CNAE_PRINC_2DIGITOS <= 43) ~ "Construção",
+     
+     (CNAE_PRINC_2DIGITOS >= 45 & CNAE_PRINC_2DIGITOS <= 47) ~ "Comércio, reparação de veículos automotores e motocicletas",
+     
+     (CNAE_PRINC_2DIGITOS >= 49 & CNAE_PRINC_2DIGITOS <= 53) ~ "Transporte, armazenagem e correio",
+     
+     (CNAE_PRINC_2DIGITOS >= 55 & CNAE_PRINC_2DIGITOS <= 56) ~ "Alojamento e alimentação",
+     
+     (CNAE_PRINC_2DIGITOS >= 58 & CNAE_PRINC_2DIGITOS <= 63) ~ "Informação e comunicação",
+     
+     (CNAE_PRINC_2DIGITOS >= 64 & CNAE_PRINC_2DIGITOS <= 66) ~ "Atividades financeiras, de seguros e serviços relacionados",
+     
+     CNAE_PRINC_2DIGITOS == 68  ~ "Atividades imobiliárias",
+     
+     (CNAE_PRINC_2DIGITOS >= 69 & CNAE_PRINC_2DIGITOS <= 75) ~  "Atividades profissionais, científicas e técnicas",
+     
+     (CNAE_PRINC_2DIGITOS >= 77 & CNAE_PRINC_2DIGITOS <= 82) ~  "Atividades administrativas e serviços complementares",
+       
+      CNAE_PRINC_2DIGITOS == 84 ~ "Administração pública, defesa e seguridade social",
+      
+      CNAE_PRINC_2DIGITOS == 85 ~ "Educação",
+      
+     (CNAE_PRINC_2DIGITOS >= 86 & CNAE_PRINC_2DIGITOS <= 88) ~ "Saúde humana e serviços sociais",
+      
+     (CNAE_PRINC_2DIGITOS >= 90 & CNAE_PRINC_2DIGITOS <= 93) ~ "Artes, cultura, esporte e recreação",
+      
+     (CNAE_PRINC_2DIGITOS >= 94 & CNAE_PRINC_2DIGITOS <= 96) ~ "Outras atividades de serviços",
+      
+     CNAE_PRINC_2DIGITOS == 97 ~ "Serviços domésticos", 
+     
+     CNAE_PRINC_2DIGITOS == 99 ~ "Organismos internacionais e outras instituições extraterritoriais"  
+))
+
+
+#natureza juridica
+
+#CÓDIGO DA NATUREZA JURÍDICA
+#2011: Empresa Pública
+#2232: Sociedade Simples Pura
+#2240: Sociedade Simples Limitada
+#2305: Empresa Individual de Responsabilidade Limitada (EIRELI)
+#3034: Serviço Notarial e Registral (Cartório)
+#4014: Empresa Individual Imobiliária
+```
+
+# Transformando para classe dicotômica
+
+```{r}
+dados_parquet_BRF_filtrado_modelo = dados_parquet_BRF_filtrado %>% filter(MATRIZ==1 & 
+         DATA_INICIO_ATV > "2014-01-01" &
+         DATA_INICIO_ATV < "2024-08-10" & 
+         PORTE_ROTULADA == "ME" ) %>% mutate(SIT_CAD_SIM_NAO = case_when( 
+  
+     SIT_CAD == 8  ~ "Sim",
+                                                                                  TRUE ~ "Não"
+                                                                  
+), NATUREZA_JURIDICA = factor(NATUREZA_JURIDICA)
+)
+
+
+
+```
+
+
+Separando em treino e teste
+
+```{r}
+
+#selectionando treino e teste 80%,20%
+data_split <- initial_split(dados_parquet_BRF_filtrado_modelo, 
+                            prop = 0.8
+                            )
+
+train_data <- training(data_split)
+test_data <- testing(data_split)
+```
+
+# Contando os exemplos da classe no treino e teste
+
+```{r}
+#Quantos exemplos de cada classe na variável resposta no treino?
+round(prop.table(table(train_data$SIT_CAD_SIM_NAO)),4)*100
+
+#Quantos exemplos de cada classe na variável no teste?
+round(prop.table(table(test_data$SIT_CAD_SIM_NAO)),4)*100
+
+```
+
+- Podemos ver que a nossa variável target não sofre de um problema de desbalanceamento muito grande, o que pode facilitar a nossa abordagem de modelagem de classificação;<p>
+
+- Para desenvolver o modelo, utlizaremos 3 variáveis explicativas, quais sejam:
+
+  - O capital social da empresa (Valor investido ao abrir a empresa);
+
+  - Os Cnaes principais de dois dígitos (Indicam a principal atividade principal da empresa);
+
+  - Natureza jurídica da empresa (Suas diferentes classificações, por exemplo se é uma empresa pública, um serviço notarial, empresa individual de responsabilidade limitada (EIRELLI), etc...);
+
+# Criando o classificador da árvore de decisão
+
+```{r}
+dt_model = decision_tree(tree_depth = 30) %>%
+  set_engine("rpart") %>%
+  set_mode("classification") #%>%
+#translate()
+
+```
+
+# Selecionando variáveis para compor o modelo
+
+```{r}
+train_data_filter = train_data %>%  select(#MATRIZ,
+                                #MOT_SIT_CAD,
+                                CNAE_PRINC_2DIGITOS,
+                                NATUREZA_JURIDICA,
+                                #PORTE,
+                                #PUBLICO_SEBRAE,
+                                CAPITAL_SOCIAL_NUMERO,
+                                SIT_CAD_SIM_NAO
+                                )
+```
+
+# Criando o modelo na base de treino
+
+```{r}
+dt_fit <- dt_model %>% 
+  fit(factor(SIT_CAD_SIM_NAO) ~ . -SIT_CAD_SIM_NAO,
+      data = train_data_filter)
+
+```
+
+# Resumo do modelo
+
+```{r}
+dt_fit 
+#%>% tidy()
+
+```
+
+# Desenho da árvore
+
+```{r}
+#plot(as.party(dt_fit$fit),
+#     main = "Decision Tree Model",
+#     cex = 0.8,  # Adjust font size
+#     col = "blue")
+
+```
+
+```{r}
+fancyRpartPlot(dt_fit$fit,main = "Árvore de decisão")
+```
+
+
+# Importância das variáveis
+
+```{r}
+vip(dt_fit, type = "importance")
+```
+
+
+```{r}
+test_data_filter = test_data %>%  select(#MATRIZ,
+                                #MOT_SIT_CAD,
+                                CNAE_PRINC_2DIGITOS,
+                                NATUREZA_JURIDICA,
+                                #PORTE,
+                                #PUBLICO_SEBRAE,
+                                CAPITAL_SOCIAL_NUMERO,
+                                SIT_CAD_SIM_NAO
+                                )
+```
+
+# Predizer categorias da target
+
+```{r}
+class_preds <- predict(dt_fit, new_data = test_data_filter,
+                       type = 'class')
+
+```
+
+# Predizer probabilidades da target
+
+```{r}
+prob_preds <- predict(dt_fit, new_data = test_data_filter, 
+                      type = 'prob')
+
+```
+
+# Juntando teste e resultados
+
+```{r}
+model_results <- test_data %>% 
+  select(SIT_CAD_SIM_NAO) %>% 
+  bind_cols(class_preds, prob_preds)
+
+```
+
+# Visualizando resultados em uma tabela
+
+```{r}
+model_results %>%
+  head()
+
+```
+
+# transformando em fator a classe
+
+```{r}
+model_results$SIT_CAD_SIM_NAO = factor(model_results$SIT_CAD_SIM_NAO)
+
+```
+
+# Criando a matriz de confusão
+
+```{r}
+conf_mat(model_results, truth = SIT_CAD_SIM_NAO,
+         estimate = .pred_class)
+
+```
+
+# calculando a acurácia
+
+```{r}
+yardstick::accuracy(model_results, truth = SIT_CAD_SIM_NAO,
+         estimate = .pred_class)
+
+```
+
+# calculando a sensibilidade
+
+```{r}
+yardstick::sens(model_results, truth = SIT_CAD_SIM_NAO,
+     estimate = .pred_class)
+
+```
+
+# Calculando a especificidade
+
+```{r}
+yardstick::spec(model_results, truth = SIT_CAD_SIM_NAO,
+     estimate = .pred_class)
+
+```
+
+# Customizando as métricas
+
+```{r}
+resultados_metricas <- yardstick::metric_set(yardstick::accuracy, yardstick::sens, yardstick::spec)
+
+```
+
+# Calculando metricas de forma customizada
+
+```{r}
+resultados_metricas(model_results, 
+                    truth = SIT_CAD_SIM_NAO,
+                    estimate = .pred_class)
+
+```
+
+# Criando a Matriz de confusão
+
+```{r}
+conf_mat(model_results,
+         truth = SIT_CAD_SIM_NAO,
+         estimate = .pred_class) %>% 
+  summary()
+
+```
+
+# Plotando a matriz de confusão
+
+```{r}
+conf_mat(model_results,
+         truth = SIT_CAD_SIM_NAO,
+         estimate = .pred_class)  %>% 
+  # criando o heat map
+  autoplot(type = "heatmap")
+
+```
+
+# Calculando métricas usando os limiares
+
+```{r}
+threshold_df <- model_results %>% 
+  roc_curve(truth = SIT_CAD_SIM_NAO, .pred_Não )
+
+```
+
+# Visualizando os limiares
+
+```{r}
+threshold_df %>%
+  head()
+
+```
+
+# Plotando a curva ROC
+
+```{r}
+threshold_df %>% 
+  autoplot()
+
+```
+
+# Calculando a área embaixo da curva
+
+```{r}
+roc_auc(model_results, truth = SIT_CAD_SIM_NAO, .pred_Não)
+```
+# Criando o classificador dos Gradient boosting
+
+```{r}
+gb_model = boost_tree(mode = "classification", trees = 100) %>%
+  set_engine("xgboost") %>% #,seed = 63233 
+  set_mode("classification") #%>%
+
+```
+
+# Selecionando variáveis para compor o modelo
+
+```{r}
+train_data_filter = train_data %>%  select(#MATRIZ,
+                                #MOT_SIT_CAD,
+                                CNAE_PRINC_2DIGITOS,
+                                NATUREZA_JURIDICA,
+                                #PORTE,
+                                #PUBLICO_SEBRAE,
+                                CAPITAL_SOCIAL_NUMERO,
+                                SIT_CAD_SIM_NAO
+                                )
+```
+
+# Criando o modelo na base de treino
+
+```{r}
+gb_fit <- gb_model %>% 
+  fit(factor(SIT_CAD_SIM_NAO) ~ . -SIT_CAD_SIM_NAO,
+      data = train_data_filter)
+```
+
+# Resumo do modelo
+
+```{r}
+#gb_fit %>% tidy()
+
+```
+
+# Desenho das árvores
+
+```{r}
+#
+```
+
+
+# Importância das variáveis
+
+```{r}
+vip(gb_fit, type = "gain")
+```
+
+
+```{r}
+test_data_filter = test_data %>%  select(#MATRIZ,
+                                #MOT_SIT_CAD,
+                                CNAE_PRINC_2DIGITOS,
+                                NATUREZA_JURIDICA,
+                                #PORTE,
+                                #PUBLICO_SEBRAE,
+                                CAPITAL_SOCIAL_NUMERO,
+                                SIT_CAD_SIM_NAO
+                                )
+```
+
+# Predizer categorias da target
+
+```{r}
+class_preds <- predict(gb_fit, new_data = test_data_filter,
+                       type = 'class')
+
+```
+
+# Predizer probabilidades da target
+
+```{r}
+prob_preds <- predict(gb_fit, new_data = test_data_filter, 
+                      type = 'prob')
+
+```
+
+# Juntando teste e resultados
+
+```{r}
+model_results <- test_data %>% 
+  select(SIT_CAD_SIM_NAO) %>% 
+  bind_cols(class_preds, prob_preds)
+
+```
+
+# Visualizando resultados em uma tabela
+
+```{r}
+model_results %>%
+  head()
+
+```
+
+# transformando em fator a classe
+
+```{r}
+model_results$SIT_CAD_SIM_NAO = factor(model_results$SIT_CAD_SIM_NAO)
+
+```
+
+# Criando a matriz de confusão
+
+```{r}
+conf_mat(model_results, truth = SIT_CAD_SIM_NAO,
+         estimate = .pred_class)
+
+```
+
+# calculando a acurácia
+
+```{r}
+yardstick::accuracy(model_results, truth = SIT_CAD_SIM_NAO,
+         estimate = .pred_class)
+
+```
+
+# calculando a sensibilidade
+
+```{r}
+yardstick::sens(model_results, truth = SIT_CAD_SIM_NAO,
+     estimate = .pred_class)
+
+```
+
+# Calculando a especificidade
+
+```{r}
+yardstick::spec(model_results, truth = SIT_CAD_SIM_NAO,
+     estimate = .pred_class)
+
+```
+
+# Customizando as métricas
+
+```{r}
+resultados_metricas <- yardstick::metric_set(yardstick::accuracy, yardstick::sens, yardstick::spec)
+
+```
+
+# Calculando metricas de forma customizada
+
+```{r}
+resultados_metricas(model_results, 
+                    truth = SIT_CAD_SIM_NAO,
+                    estimate = .pred_class)
+
+```
+
+# Criando a Matriz de confusão
+
+```{r}
+conf_mat(model_results,
+         truth = SIT_CAD_SIM_NAO,
+         estimate = .pred_class) %>% 
+  summary()
+
+```
+
+# Plotando a matriz de confusão
+
+```{r}
+conf_mat(model_results,
+         truth = SIT_CAD_SIM_NAO,
+         estimate = .pred_class)  %>% 
+  # criando o heat map
+  autoplot(type = "heatmap")
+
+```
+
+# Calculando métricas usando os limiares
+
+```{r}
+threshold_df <- model_results %>% 
+  roc_curve(truth = SIT_CAD_SIM_NAO, .pred_Não )
+
+```
+
+# Visualizando os limiares
+
+```{r}
+threshold_df %>%
+  head()
+
+```
+
+# Plotando a curva ROC
+
+```{r}
+threshold_df %>% 
+  autoplot()
+
+```
+
+# Calculando a área embaixo da curva
+
+```{r}
+roc_auc(model_results, truth = SIT_CAD_SIM_NAO, .pred_Não)
+```
+
+# Tabela de comparação de métricas dos modelos de classificação
+
+```{r}
+tabela_metricas = data.frame( Modelo= c("Árvore de decisão","Gradient boosting"),
+Acuracia = c("0,766","0,800"), F1=c("0,740","0,789"),Precisão =c("0,795","0,802"),Revocação=c("0,693","0,776"),Espeficidade=c("0,833","0,822"),Roc_Auc=c("0,812","0,866"))
+
+kableExtra::kable(tabela_metricas,align = "lccrr",caption = "Tabela de comparação de métricas dos modelos de classificação")
+```
+
+- Analisando os modelos e suas respectivas métricas, cabe destacar que o modelo que obteve a melhor perfomance geral foi o **Gradient Boosting (GB)**, sendo **superior em todas as métricas, exceto na especificidade**:<p>
+
+  - **F1 Score GB**(78,9%); <p>
+
+  - **Acurácia GB** (80,0%); <p>
+
+  - **Roc AUC GB** (86,6%); <p>
+  
+
+- **F1-Score** : É a média harmônica da precisão e do recall. É útil quando se deseja um bom equilíbrio entre precisão e recall. <p>
+
+- **Interpretação**: Um F1-score de 78,9% indica um bom equilíbrio entre precisão e recall, sugerindo que o modelo tem um bom desempenho geral. <p>
+
+- **Acurácia** : Indica a proporção total de previsões corretas. Em outras palavras, o modelo acertou 80,0% das vezes. <p>
+
+- **Interpretação**: É um bom indicador geral de desempenho, mas pode ser enganoso em casos de desbalanceamento de classes, que não é o caso da análise. <p>
+
+- **Roc**: A curva ROC pode fornecer uma visão mais completa do desempenho do modelo, especialmente em cenários com diferentes limiares de classificação. Ela plota a taxa de verdadeiros positivos (sensibilidade) contra a taxa de falsos positivos (1 - especificidade) em vários pontos de corte. <p>
+
+- **Área Sob a Curva ROC**: A área sob a curva ROC é um único valor que resume o desempenho global do modelo. Um AUC de 1 indica um classificador perfeito, enquanto um AUC de 0.5 indica um classificador aleatório, o nosso foi 0,866, indicando um desempenho bom do modelo. <p>
+
+**Observações**: O modelo perdeu nos seguintes quesitos: <p>
+
+- **Especificidade (0,822)** (Perdeu para **Árvore de decisão (0,833)** ) <p>
+
+  - **Especificidade**: Indica a proporção de exemplos negativos que foram corretamente identificados, ou seja quantas empresas que de fato não foram baixadas e o modelo previu como não baixadas e estava correto em 82,2% das vezes. <p>
+  
+Considerações finais <p>
+
+-  Desenvolvemos um modelo de **classificação** com **alta precisão** para prever quais empresas **encerrariam suas atividades** que contempla *3 variáveis explicativas*, quais sejam: **O capital social da empresa** (Valor investido ao abrir a empresa), **os Cnaes principais de dois dígitos** (Indicam a principal atividade principal da empresa) e a natureza jurídica da empresa (Suas diferentes classificações, por exemplo se é uma empresa pública, um serviço notarial, empresa individual de responsabilidade limitada (EIRELLI), etc...). Os resultados indicam que o modelo proposto é capaz de **identificar corretamente 80,0%** dos casos, com um **F1-score de 78,9%** e uma AUC de **86,6%**.
+
