@@ -1,0 +1,1443 @@
+---
+title: "Desafio Sebrae - Perfil de Mortalidade das empresas"
+author: "Thiago Marques"
+date: "2024-09-19"
+output: rmdformats::readthedown
+highlight: kate
+css: StyleClube2.css
+---
+
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(warning = FALSE, message = FALSE)
+knitr::opts_knit$set(root.dir = "C:/Users/teste/Desktop/SEBRAE")
+```
+
+# Analise da Mortalidade das empresas - Receita federal 2024
+
+```{r echo=FALSE, fig.align="center", out.width="80%"}
+knitr::include_graphics("C:/Users/teste/Desktop/SEBRAE/images.png")
+```  
+
+
+```{r include=FALSE}
+options(scipen = 9999)
+vetor_pacotes = c(
+  "arrow",
+  "ggplot2",
+  "plotly",
+  "e1071",
+  "dplyr",
+  "Hmisc",
+  "DescTools",
+  "naniar",
+#  "esquisse",
+  "gridExtra",
+  "kableExtra",
+  "lubridate",
+  "stringr",
+#  "ggpmisc",
+  "summarytools",
+  "scales",
+ "ggpmisc",
+ "PreProcess",
+ "glmnet",
+  "pROC",
+  "caret",
+  "tidymodels",
+  "yardstick",
+  "parsnip",
+  "baguette",
+  "ranger",
+  "kknn",
+  "xgboost"
+#  "igraph",
+#  "ggnetwork",
+#  "intergraph",
+#  "ITNr",
+#  "ggpubr"
+  
+)
+#install.packages(vetor_pacotes)
+lapply(vetor_pacotes, require, character.only = TRUE)
+
+```
+
+# Carregando o banco de dados
+
+```{r include=T}
+dados_parquet_BRF = arrow::read_parquet("BRF_FINAL_1.parquet")
+#dados_parquet_depara_CNAESEC = arrow::read_parquet("CNAESEC.parquet")
+dados_parquet_SOCIOS = arrow::read_parquet("Socios.parquet")
+```
+
+# Analisando as variáveis faltantes do banco de dados de forma visual
+
+```{r}
+naniar::gg_miss_var(dados_parquet_BRF) 
+```
+
+```{r}
+naniar::gg_miss_var(dados_parquet_SOCIOS)
+```
+
+
+## Vendo a estrutura dos dados e os resumindo
+
+```{r include=T}
+glimpse(dados_parquet_BRF)
+```
+
+```{r include=T}
+glimpse(dados_parquet_SOCIOS)
+```
+
+# Filtrando variáveis de interesse para a análise
+
+```{r include=T}
+dados_parquet_BRF_filtrado = dados_parquet_BRF %>%  select ( MATRIZ,
+                            NOME_F,
+                            SIT_CAD,
+                            DATA_SIT_CAD,
+                            MOT_SIT_CAD,
+                            DATA_INICIO_ATV,
+                            CNAE_PRINC,
+                            CNAE_SEC,
+                            MUNIC,
+                            SIT_ESP,
+                            DATA_SIT_ESP,
+                            CNPJ,
+                            RAZAO_SOCIAL,
+                            NATUREZA_JURIDICA,
+                            CAPITAL_SOCIAL,
+                            PORTE,
+                            OP_SIMPLES,
+                            DT_OP_SIMPLES,
+                            OP_MEI,
+                            DT_OP_MEI,
+                            DT_EX_SIMPLES,
+                            DT_EX_MEI,
+                            code_muni,
+                            PUBLICO_SEBRAE
+                            )
+
+dados_parquet_SOCIOS_filtrado = dados_parquet_SOCIOS %>% select( CNPJ_BAS,
+                                                              IDENTIFICADOR_DE_SÓCIO,
+                                                           DATA_DE_ENTRADA_SOCIEDADE)
+
+#transformando o campo CNPJ de 8 dígitos
+dados_parquet_BRF_filtrado$CNPJ_BAS = str_sub(dados_parquet_BRF_filtrado$CNPJ,1,8) 
+
+```
+
+# Resumo dos dados filtrados
+
+```{r}
+#summarytools::view(dfSummary(dados_parquet_BRF_filtrado))
+summary(dados_parquet_BRF_filtrado)
+```
+
+```{r}
+#summarytools::view(dfSummary(dados_parquet_BRF_filtrado))
+summary(dados_parquet_BRF_filtrado)
+```
+
+
+# Unindo as tabelas (Fazendo o Join) 
+
+-  Inclusão da variável identificadora do sócio e data de entrada na sociedade para uma análise posterior
+
+```{r}
+dados_join_filtrado = inner_join(dados_parquet_BRF_filtrado,dados_parquet_SOCIOS_filtrado, by="CNPJ_BAS")
+```
+
+# Analisando variáveis faltantes após os filtros
+
+```{r out.width="30%" } 
+PlotMiss(dados_parquet_BRF_filtrado,main="Valores faltantes no Banco", bg = SetAlpha(hecru, 0.01))
+```
+
+- Podemos notar que as variáveis situação especial e data de situação espacial estão completamente vazias praticamente, quase 100% de faltantes.
+
+- A variável nome fantasia também tem mais de 50% de valores faltantes, podemos destacar também a variável de opção pelo simples, a variável de opção pelo MEI e suas respectivas datas de inclusão e exclusão também tem um número alto de faltantes, porém nesse caso não é algo que se pode jogar fora pois nem todas as empresas serão MEIS ou vão optar pelo Simples Nacional.
+
+```{r}
+PlotMiss(dados_parquet_SOCIOS_filtrado,main="Valores faltantes no Banco", bg = SetAlpha(hecru, 0.01))
+
+```
+
+- Na base de sócios não há variáveis faltantes nas variáveis selecionadas.
+
+# Transformação das variáveis de data e rótulos
+
+```{r}
+dados_parquet_BRF_filtrado$ANO_DATA_INICIO_ATV = Year(dados_parquet_BRF_filtrado$DATA_INICIO_ATV)
+
+dados_parquet_BRF_filtrado$MES_DATA_INICIO_ATV = Month(dados_parquet_BRF_filtrado$DATA_INICIO_ATV)
+
+dados_parquet_BRF_filtrado$DIA_DATA_INICIO_ATV = day(dados_parquet_BRF_filtrado$DATA_INICIO_ATV)
+
+dados_parquet_BRF_filtrado = dados_parquet_BRF_filtrado %>% mutate(SIT_CAD_ROTULADA = case_when( 
+  
+     SIT_CAD == 1 ~ "Nula",
+                                                                    SIT_CAD == 2 ~ "Ativa",
+                                                                    SIT_CAD == 3 ~ "Suspensa",
+                                                                    SIT_CAD == 4 ~ "Inapta",
+                                                                    SIT_CAD == 8 ~ "Baixada"
+))
+
+dados_parquet_BRF_filtrado = dados_parquet_BRF_filtrado %>% mutate(MATRIZ_ROTULADA = case_when( 
+  
+     MATRIZ == 1 ~ "Matriz",
+                                                                           MATRIZ == 2 ~ "Filial"
+                                                                  
+))
+
+dados_parquet_BRF_filtrado = dados_parquet_BRF_filtrado %>% mutate(OP_SIMPLES_ROTULADA = case_when( 
+  
+     OP_SIMPLES == 0 ~ "Não",
+                                                                                   OP_SIMPLES == 1 ~ "Sim"
+     
+                                                                  
+))
+
+dados_parquet_BRF_filtrado = dados_parquet_BRF_filtrado %>% mutate(OP_MEI_ROTULADA = case_when( 
+  
+     OP_MEI == 0 ~ "Não",
+                                                                                   OP_MEI == 1 ~ "Sim"
+     
+                                                                  
+))
+
+dados_parquet_BRF_filtrado = dados_parquet_BRF_filtrado %>% mutate(PUBLICO_SEBRAE_ROTULADA = case_when( 
+  
+     PUBLICO_SEBRAE == 0 ~ "Não",
+                                                                                   PUBLICO_SEBRAE == 1 ~ "Sim"
+     
+                                                                  
+))
+#VARIAVEL INCONSSISTENTE COM O DICIONÁRIO DE DADOS
+#dados_parquet_BRF_filtrado = dados_parquet_BRF_filtrado %>% mutate(PORTE_ROTULADA = case_when( 
+  
+#     PORTE == 1 ~ "Micro Empresa",
+                                                                           
+#     PORTE == 3 ~ "Empresa de Pequeno porte",
+     
+#     PORTE == 4 ~ "Não informado",
+     
+#     PORTE == 5 ~ "Demais"
+     
+                                                                  
+#))
+
+
+dados_parquet_BRF_filtrado$CAPITAL_SOCIAL_NUMERO = as.numeric(gsub(",",".",dados_parquet_BRF_filtrado$CAPITAL_SOCIAL))
+
+#PEGAR AS CNAES PRINCIPAIS E CLASSIFICAR 
+
+dados_parquet_BRF_filtrado$CNAE_PRINC_2DIGITOS = as.numeric(str_sub(dados_parquet_BRF_filtrado$CNAE_PRINC,1,2)) 
+
+dados_parquet_BRF_filtrado = dados_parquet_BRF_filtrado %>% mutate(CNAE_PRINC_2DIGITOS_ROTULADA = case_when( 
+  
+     (CNAE_PRINC_2DIGITOS >= 1 & CNAE_PRINC_2DIGITOS <= 3) ~ "Agricultura, pecuária, produção florestal, pesca e aqüicultura",
+                                                                           
+     (CNAE_PRINC_2DIGITOS >= 5 & CNAE_PRINC_2DIGITOS <= 9) ~ "Indústrias extrativas",
+     
+     (CNAE_PRINC_2DIGITOS >= 10 & CNAE_PRINC_2DIGITOS <= 33) ~ "Indústrias de transformação",
+     
+     CNAE_PRINC_2DIGITOS == 35 ~ "Eletricidade e gás",
+      
+     (CNAE_PRINC_2DIGITOS >= 36 & CNAE_PRINC_2DIGITOS <= 39) ~ "Água, esgoto, atividades de gestão de resíduos e descontaminação",
+      
+     (CNAE_PRINC_2DIGITOS >= 41 & CNAE_PRINC_2DIGITOS <= 43) ~ "Construção",
+     
+     (CNAE_PRINC_2DIGITOS >= 45 & CNAE_PRINC_2DIGITOS <= 47) ~ "Comércio, reparação de veículos automotores e motocicletas",
+     
+     (CNAE_PRINC_2DIGITOS >= 49 & CNAE_PRINC_2DIGITOS <= 53) ~ "Transporte, armazenagem e correio",
+     
+     (CNAE_PRINC_2DIGITOS >= 55 & CNAE_PRINC_2DIGITOS <= 56) ~ "Alojamento e alimentação",
+     
+     (CNAE_PRINC_2DIGITOS >= 58 & CNAE_PRINC_2DIGITOS <= 63) ~ "Informação e comunicação",
+     
+     (CNAE_PRINC_2DIGITOS >= 64 & CNAE_PRINC_2DIGITOS <= 66) ~ "Atividades financeiras, de seguros e serviços relacionados",
+     
+     CNAE_PRINC_2DIGITOS == 68  ~ "Atividades imobiliárias",
+     
+     (CNAE_PRINC_2DIGITOS >= 69 & CNAE_PRINC_2DIGITOS <= 75) ~  "Atividades profissionais, científicas e técnicas",
+     
+     (CNAE_PRINC_2DIGITOS >= 77 & CNAE_PRINC_2DIGITOS <= 82) ~  "Atividades administrativas e serviços complementares",
+       
+      CNAE_PRINC_2DIGITOS == 84 ~ "Administração pública, defesa e seguridade social",
+      
+      CNAE_PRINC_2DIGITOS == 85 ~ "Educação",
+      
+     (CNAE_PRINC_2DIGITOS >= 86 & CNAE_PRINC_2DIGITOS <= 88) ~ "Saúde humana e serviços sociais",
+      
+     (CNAE_PRINC_2DIGITOS >= 90 & CNAE_PRINC_2DIGITOS <= 93) ~ "Artes, cultura, esporte e recreação",
+      
+     (CNAE_PRINC_2DIGITOS >= 94 & CNAE_PRINC_2DIGITOS <= 96) ~ "Outras atividades de serviços",
+      
+     CNAE_PRINC_2DIGITOS == 97 ~ "Serviços domésticos", 
+     
+     CNAE_PRINC_2DIGITOS == 99 ~ "Organismos internacionais e outras instituições extraterritoriais"  
+))
+
+#01 .. 03 - Agricultura, pecuária, produção florestal, pesca e aqüicultura
+#05 .. 09 - Indústrias extrativas
+#10 .. 33 - Indústrias de transformação
+#35 - Eletricidade e gás 
+#36 .. 39 - Água, esgoto, atividades de gestão de resíduos e descontaminação
+#41 .. 43 - Construção
+#45 .. 47 - Comércio; reparação de veículos automotores e motocicletas 
+#49 .. 53 - Transporte, armazenagem e correio
+#55 .. 56 - Alojamento e alimentação
+#58 .. 63 - Informação e comunicação
+#64 .. 66 - Atividades financeiras, de seguros e serviços relacionados
+#68 - Atividades imobiliárias
+#69 .. 75 - Atividades profissionais, científicas e técnicas
+#77 .. 82 - Atividades administrativas e serviços complementares
+#84 - Administração pública, defesa e seguridade social
+#85 - Educação
+#86 .. 88 - Saúde humana e serviços sociais
+#90 .. 93 - Artes, cultura, esporte e recreação
+#94 .. 96 - Outras atividades de serviços
+#97 - Serviços domésticos
+#99 - Organismos internacionais e outras instituições extraterritoriais 
+
+```
+
+# Número de empresas matrizes que iniciaram as atividades no Maranhão desde 1903 a 2024
+
+
+```{r}
+#dados_parquet_BRF_filtrado_agregado = dados_parquet_BRF_filtrado %>%  group_by(ANO_DATA_INICIO_ATV)  %>% summarise(total_empresas = n()) %>%  arrange(desc(total_empresas))
+#%>% #filter(total_empresas>1000) 
+
+dados_parquet_BRF_filtrado_agregado = dados_parquet_BRF_filtrado %>% 
+  filter(MATRIZ == 1) %>% 
+  mutate(
+    mes_atividade = floor_date(DATA_INICIO_ATV, "quarter"),
+    ano_atividade = floor_date(DATA_INICIO_ATV, "year")
+  ) %>% 
+  filter(DATA_INICIO_ATV > "1903-01-01",
+         DATA_INICIO_ATV < "2024-08-10") %>% 
+  count(ano_atividade)
+
+grafico_linha_inicio_atividades =  
+  
+  dados_parquet_BRF_filtrado_agregado %>% 
+  mutate(mes_atividade = ano_atividade) %>% 
+  filter(year(mes_atividade) > 1903,
+         year(mes_atividade) < 2019) %>% 
+  ggplot(aes(x = mes_atividade, y = n)) +
+  geom_line(size = 1) +
+  theme_minimal(14) +
+  scale_x_date(breaks = scales::date_breaks("10 year"),
+               labels = scales::date_format("%Y")) +
+  scale_y_continuous(labels = scales::label_number(big.mark = "."),breaks = seq(0,65000,12000 ) )+
+  ggtitle("Quantidade de empresas por ano de início de atividade no Maranhão - 1900 a 2024") + 
+  #scale_y_continuous(limits = c(0, 800)) +
+  labs(x = "Ano de início das atividades",
+       y = "Quantidade de empresas") +
+  theme(axis.text.x = element_text(angle = 45, hjust = 1),
+        panel.grid.minor.x = element_blank())    
+
+grafico_linha_inicio_atividades
+```
+
+- Podemos observar que parece haver uma tendência crescente na série de início das atividades de empresas no Maranhão, mesmo que no haja picos e vales em alguns momentos, indicando altas e baixas.
+
+# Quantidade de empresas por atividade de classificação CNAE
+
+```{r}
+dados_parquet_BRF_filtrado_CNAE = dados_parquet_BRF_filtrado %>% 
+  filter(MATRIZ==1) %>% count(CNAE_PRINC_2DIGITOS_ROTULADA) %>% arrange(desc(n)) %>% head(10)
+
+dados_parquet_BRF_filtrado_CNAE$CNAE_PRINC_2DIGITOS_ROTULADA_ORD = factor(dados_parquet_BRF_filtrado_CNAE$CNAE_PRINC_2DIGITOS_ROTULADA, levels =c("Comércio, reparação de veículos automotores e motocicletas","Outras atividades de serviços","Alojamento e alimentação", "Indústrias de transformação","Saúde humana e serviços sociais","Atividades profissionais, científicas e técnicas","Construção","Atividades administrativas e serviços complementares","Transporte, armazenagem e correio","Educação")
+)
+
+grafico_barras_CNAE = ggplot(data=dados_parquet_BRF_filtrado_CNAE, aes(x=CNAE_PRINC_2DIGITOS_ROTULADA_ORD, y=n, fill=CNAE_PRINC_2DIGITOS_ROTULADA_ORD)) +
+  geom_bar(stat="identity", position=position_dodge(), colour="black") +
+  ggtitle("Top 10 Total de empresas por CNAE no Maranhão - 1903 a 2024") + 
+  xlab("CNAE") + ylab("Total de empresas") +
+  theme(axis.text.x = element_text(angle = -90, vjust = 0.5, hjust=1)) +
+  theme(legend.position = "none")
+
+ggplotly(grafico_barras_CNAE)
+```
+
+- Podemos destacar que nas top 10 cnae do Maranhão, 43,99% das empresas são classificadas como: atividade de  Comércio, reparação de veículos automotores e motocicletas.
+
+# Quantidade de empresas por tipo de situação cadastral 
+
+```{r}
+
+df_pizza_tab=table(dados_parquet_BRF_filtrado$SIT_CAD_ROTULADA)
+df_pizza =  data.frame(df_pizza_tab) 
+  
+
+colors <- c('rgb(0,204,204)', 'rgb(102,51,0)')
+
+grafico_pizza_iterativo = plot_ly(df_pizza, 
+                            labels = ~Var1, 
+                            values = ~Freq, 
+                            marker = list(colors = colors),
+                            type = 'pie') %>%
+                            layout(title = 'Quantidade de empresas por tipo de situação cadastral (%) ')
+
+grafico_pizza_iterativo 
+```
+Classicações das empresas em *situação cadastral*:
+
+- *NULA*:
+
+O cadastro é considerado nulo, geralmente por algum erro na inscrição ou por não ter sido concluído corretamente.
+Implicações: A pessoa jurídica ou física não possui existência legal e não pode realizar operações que exijam um cadastro válido.
+
+- *ATIVA*:
+
+O cadastro está regular e ativo, ou seja, a pessoa jurídica ou física está em pleno funcionamento e em dia com suas obrigações.
+Implicações: Permite realizar todas as operações legais, como emitir notas fiscais, participar de licitações e obter crédito.
+
+- *SUSPENSA*:
+
+O cadastro está temporariamente suspenso, geralmente por alguma irregularidade ou pendência a ser regularizada.
+Implicações: Limita as atividades que podem ser realizadas, como a emissão de notas fiscais. A empresa precisa regularizar sua situação para voltar a operar normalmente.
+
+- *INAPTA*:
+
+O cadastro está inapto, o que significa que a pessoa jurídica ou física não está mais em atividade ou não atende aos requisitos legais para continuar existindo.
+Implicações: A empresa não pode mais realizar operações comerciais e pode ser extinta.
+
+- *BAIXADA*:
+
+O cadastro foi baixado, ou seja, a pessoa jurídica ou física foi extinta oficialmente. 
+Implicações: A empresa não existe mais legalmente e não pode realizar nenhuma operação.
+
+Podemos ver que a maior parte das empresas no maranhão estão em situação de Baixada (45,8%) ou Inapta (17,2 %), sendo a primeira extinta oficialmente e no segundo caso, Não existe mais ou não atende os requisitos legais para existir e somente 36,6% está ativa (Pode operar normalmente na legalidade) e menos de 1% se concentra nas categorias suspensas  e nulas. 
+
+# Quantidade de empresas por tipo filial ou matriz
+
+```{r}
+
+df_pizza_tab=table(dados_parquet_BRF_filtrado$MATRIZ_ROTULADA)
+df_pizza =  data.frame(df_pizza_tab) 
+  
+
+colors <- c('rgb(0,204,204)', 'rgb(102,51,0)')
+
+grafico_pizza_iterativo = plot_ly(df_pizza, 
+                            labels = ~Var1, 
+                            values = ~Freq, 
+                            marker = list(colors = colors),
+                            type = 'pie') %>%
+                            layout(title = 'Quantidade de empresas por tipo de filial ou matriz (%) ')
+
+grafico_pizza_iterativo 
+```
+- A grande maior parte das empresas no Maranhão são Matrizes (95,9%) e somente são filiais (4,08%).
+
+# Quantidade de Empresas optantes pelo simples
+
+```{r}
+
+df_pizza_tab=table(dados_parquet_BRF_filtrado$OP_SIMPLES_ROTULADA)
+df_pizza =  data.frame(df_pizza_tab) 
+  
+
+colors <- c('rgb(0,204,204)', 'rgb(102,51,0)')
+
+grafico_pizza_iterativo = plot_ly(df_pizza, 
+                            labels = ~Var1, 
+                            values = ~Freq, 
+                            marker = list(colors = colors),
+                            type = 'pie') %>%
+                            layout(title = 'Quantidade de empresas optantes pelo simples (%) ')
+
+grafico_pizza_iterativo 
+```
+
+- Somente (34,5%) São optantes pelo Simples Nacional.
+
+# Quantidade de Empresas optantes pelo Mei
+
+```{r}
+
+df_pizza_tab=table(dados_parquet_BRF_filtrado$OP_MEI_ROTULADA)
+df_pizza =  data.frame(df_pizza_tab) 
+  
+
+colors <- c('rgb(0,204,204)', 'rgb(102,51,0)')
+
+grafico_pizza_iterativo = plot_ly(df_pizza, 
+                            labels = ~Var1, 
+                            values = ~Freq, 
+                            marker = list(colors = colors),
+                            type = 'pie') %>%
+                            layout(title = 'Quantidade de empresas optantes pelo MEI (%) ')
+
+grafico_pizza_iterativo 
+```
+
+- Somente (20,4%) São optantes pelo MEI.
+
+# Quantas empresas são do Público SEBRAE Maranhão
+
+```{r}
+
+df_pizza_tab=table(dados_parquet_BRF_filtrado$PUBLICO_SEBRAE_ROTULADA)
+df_pizza =  data.frame(df_pizza_tab) 
+  
+
+colors <- c('rgb(0,204,204)', 'rgb(102,51,0)')
+
+grafico_pizza_iterativo = plot_ly(df_pizza, 
+                            labels = ~Var1, 
+                            values = ~Freq, 
+                            marker = list(colors = colors),
+                            type = 'pie') %>%
+                            layout(title = 'Quantidade de empresas que são público do Sebrae Maranhão (%) ')
+
+grafico_pizza_iterativo 
+```
+
+- A grande maior parte das empresas são público do SEBRAE Maranhão (67,1%).
+
+# Número de empresas matrizes que encerraram as atividades no Maranhão desde 1903 a 2024
+
+```{r}
+#dados_parquet_BRF_filtrado_agregado = dados_parquet_BRF_filtrado %>%  group_by(ANO_DATA_INICIO_ATV)  %>% summarise(total_empresas = n()) %>%  arrange(desc(total_empresas))
+#%>% #filter(total_empresas>1000) 
+
+dados_parquet_BRF_filtrado_agregado_baixadas = dados_parquet_BRF_filtrado %>% 
+  filter(MATRIZ == 1 & SIT_CAD == 8) %>% 
+  mutate(
+    mes_atividade = floor_date(DATA_SIT_CAD, "quarter"),
+    ano_atividade = floor_date(DATA_SIT_CAD, "year")
+  ) %>% 
+  filter(DATA_SIT_CAD > "1903-01-01",
+         DATA_SIT_CAD < "2024-08-10") %>% 
+  count(ano_atividade)
+
+grafico_linha_termino_atividades =  
+  
+  dados_parquet_BRF_filtrado_agregado_baixadas %>% 
+  mutate(mes_atividade = ano_atividade) %>% 
+  filter(year(mes_atividade) > 1903,
+         year(mes_atividade) < 2019) %>% 
+  ggplot(aes(x = mes_atividade, y = n)) +
+  geom_line(size = 1) +
+  theme_minimal(14) +
+  scale_x_date(breaks = scales::date_breaks("10 year"),
+               labels = scales::date_format("%Y")) +
+  scale_y_continuous(labels = scales::label_number(big.mark = "."),breaks = seq(0,92000,12000 ) )+
+  ggtitle("Quantidade de empresas por ano de término de atividade no Maranhão - 1900 a 2024") + 
+  #scale_y_continuous(limits = c(0, 800)) +
+  labs(x = "Ano de término das atividades",
+       y = "Quantidade de empresas") +
+  theme(axis.text.x = element_text(angle = 45, hjust = 1),
+        panel.grid.minor.x = element_blank())    
+
+grafico_linha_termino_atividades
+```
+
+- Podemos dar destaque aos anos de 2008 (92847 (22,55%) de Baixas) com o maior pico de baixas e o ano de 2021 (36257 (8,81%) de Baixas), já durante a pandemia com o segundo maior pico de baixas no Maranhão.
+
+# Comparando as empresas matrizes em seus inícios de atividade com as suas baixas no Maranhão de 1903 a 2024
+
+```{r}
+ggplot() + 
+    geom_line(data = dados_parquet_BRF_filtrado_agregado, aes(year(dados_parquet_BRF_filtrado_agregado$ano_atividade), n, color = "Inicio")) + 
+    geom_line(data = dados_parquet_BRF_filtrado_agregado_baixadas, aes(year(dados_parquet_BRF_filtrado_agregado_baixadas$ano_atividade), n, color = "Encerramento"))+
+   labs(x = "Ano",
+       y = "Quantidade de empresas",color = "Atividade da empresa")+
+  theme_minimal()
+  
+```
+
+# Quantidade de empresas que deram baixa por atividade de classificação CNAE
+
+```{r}
+dados_parquet_BRF_filtrado_CNAE_baixas = dados_parquet_BRF_filtrado %>% filter(MATRIZ==1 & SIT_CAD == 8) %>% count(CNAE_PRINC_2DIGITOS_ROTULADA) %>% arrange(desc(n)) %>% head(10)
+
+dados_parquet_BRF_filtrado_CNAE_baixas$CNAE_PRINC_2DIGITOS_ROTULADA_ORD = factor(dados_parquet_BRF_filtrado_CNAE_baixas$CNAE_PRINC_2DIGITOS_ROTULADA, levels =c("Comércio, reparação de veículos automotores e motocicletas","Outras atividades de serviços","Saúde humana e serviços sociais ", "Alojamento e alimentação","Indústrias de transformação","Atividades profissionais, científicas e técnicas","Atividades administrativas e serviços complementares","Construção","Transporte, armazenagem e correio ","Educação")
+)
+
+grafico_barras_CNAE_baixas = ggplot(data=dados_parquet_BRF_filtrado_CNAE_baixas, aes(x=CNAE_PRINC_2DIGITOS_ROTULADA_ORD, y=n, fill=CNAE_PRINC_2DIGITOS_ROTULADA_ORD)) +
+  geom_bar(stat="identity", position=position_dodge(), colour="black") +
+  ggtitle("Top 10 Total de empresas por CNAE no Maranhão - 1903 a 2024") + 
+  xlab("CNAE") + ylab("Total de empresas") +
+  theme(axis.text.x = element_text(angle = -90, vjust = 0.5, hjust=1)) +
+  theme(legend.position = "none")
+
+ggplotly(grafico_barras_CNAE_baixas)
+```
+
+- Podemos destacar que no Maranhão nas top 10 cnae e olhando para as empresas que pediram baixa, 40,22% das empresas são classificadas como: atividade de  Comércio, reparação de veículos automotores e motocicletas a segunda foram as consideradas como outras atividades de serviços com 32,91% e em terceiro as empresas consideradas como alojamento ou alimentação 5,99 %.
+
+# Quantidade de empresas por atividade de classificação CNAE que são público do SEBRAE MA
+
+```{r}
+dados_parquet_BRF_filtrado_CNAE_baixas_SEBRAE = dados_parquet_BRF_filtrado %>% filter(MATRIZ==1 & SIT_CAD == 8 & PUBLICO_SEBRAE == 1) %>% count(CNAE_PRINC_2DIGITOS_ROTULADA) %>% arrange(desc(n)) %>% head(10)
+
+dados_parquet_BRF_filtrado_CNAE_baixas_SEBRAE$CNAE_PRINC_2DIGITOS_ROTULADA_ORD = factor(dados_parquet_BRF_filtrado_CNAE_baixas_SEBRAE$CNAE_PRINC_2DIGITOS_ROTULADA, levels =c("Comércio, reparação de veículos automotores e motocicletas","Alojamento e alimentação","Indústrias de transformação", "Outras atividades de serviços","Atividades profissionais, científicas e técnicas","Atividades administrativas e serviços complementares","Construção","Transporte, armazenagem e correio","Educação ","Saúde humana e serviços sociais")
+)
+
+grafico_barras_CNAE_baixas_SEBRAE = ggplot(data=dados_parquet_BRF_filtrado_CNAE_baixas_SEBRAE, aes(x=CNAE_PRINC_2DIGITOS_ROTULADA_ORD, y=n, fill=CNAE_PRINC_2DIGITOS_ROTULADA_ORD)) +
+  geom_bar(stat="identity", position=position_dodge(), colour="black") +
+  ggtitle("Top 10 Total de empresas por CNAE no Maranhão - 1903 a 2024") + 
+  xlab("CNAE") + ylab("Total de empresas") +
+  theme(axis.text.x = element_text(angle = -90, vjust = 0.5, hjust=1)) +
+  theme(legend.position = "none")
+
+ggplotly(grafico_barras_CNAE_baixas_SEBRAE)
+```
+
+- Podemos destacar que no Maranhão nas top 10 cnae e olhando para as empresas que pediram baixa, (57,16%) das empresas são classificadas como: atividade de  Comércio, reparação de veículos automotores e motocicletas a segunda foram as consideradas como alojamento ou alimentação (8,16 %) e depois indústria de transformação (3,49%).
+
+# Quantas empresas são do Público SEBRAE Maranhão e deram baixa
+
+```{r}
+dados_parquet_BRF_filtrado_sebrae = dados_parquet_BRF_filtrado %>% filter(SIT_CAD == 8)
+
+df_pizza_tab=table(dados_parquet_BRF_filtrado_sebrae$PUBLICO_SEBRAE_ROTULADA)
+df_pizza =  data.frame(df_pizza_tab) 
+  
+
+colors <- c('rgb(0,204,204)', 'rgb(102,51,0)')
+
+grafico_pizza_iterativo = plot_ly(df_pizza, 
+                            labels = ~Var1, 
+                            values = ~Freq, 
+                            marker = list(colors = colors),
+                            type = 'pie') %>%
+                            layout(title = 'Quantidade de empresas que são público do Sebrae Maranhão (%) ')
+
+grafico_pizza_iterativo 
+```
+
+
+- Podemos destacar que no Maranhão das empresas que eram público SEBRAE, 46,8% deram baixa, o que pode significar uma relevância em fazer parte do público SEBRAE para essas empresas.
+
+
+
+# Classificação de empresas baixadas 
+
+# Transformando para classe dicotômica
+
+```{r}
+dados_parquet_BRF_filtrado = dados_parquet_BRF_filtrado %>% mutate(SIT_CAD_SIM_NAO = case_when( 
+  
+     SIT_CAD == 8  ~ "Sim",
+                                                                                  TRUE ~ "Não"
+                                                                  
+))
+
+```
+
+Separando em treino e teste
+
+```{r}
+
+#selectionando treino e teste 80%,20%
+data_split <- initial_split(dados_parquet_BRF_filtrado, 
+                            prop = 0.8
+                            )
+
+train_data <- training(data_split)
+test_data <- testing(data_split)
+```
+
+# Contando os exemplos da classe no treino e teste
+
+```{r}
+#Quantos exemplos de cada classe na variável resposta no treino?
+round(prop.table(table(train_data$SIT_CAD_SIM_NAO)),4)*100
+
+#Quantos exemplos de cada classe na variável no teste?
+round(prop.table(table(test_data$SIT_CAD_SIM_NAO)),4)*100
+
+```
+
+```{r}
+# treino
+#x_train = subset(train_data,select = -c(SIT_CAD_SIM_NAO,SIT_CAD))
+#y_train = train_data$SIT_CAD_SIM_NAO
+
+# teste
+#X_test = subset(test_data,select = -c(SIT_CAD_SIM_NAO,SIT_CAD))
+#y_test = test_data$SIT_CAD_SIM_NAO
+```
+
+# Criando o classificador da árvore de decisão
+
+```{r}
+dt_model = decision_tree(tree_depth = 30) %>%
+  set_engine("rpart") %>%
+  set_mode("classification") #%>%
+#translate()
+
+```
+
+# Selecionando variáveis para compor o modelo
+
+```{r}
+train_data_filter = train_data %>%  select(MATRIZ,
+                                #MOT_SIT_CAD,
+                                CNAE_PRINC_2DIGITOS,
+                                NATUREZA_JURIDICA,
+                                PORTE,
+                                PUBLICO_SEBRAE,
+                                CAPITAL_SOCIAL_NUMERO,
+                                SIT_CAD_SIM_NAO
+                                )
+```
+
+# Criando o modelo na base de treino
+
+```{r}
+dt_fit <- dt_model %>% 
+  fit(factor(SIT_CAD_SIM_NAO) ~ .,
+      data = train_data_filter)
+
+```
+
+# Estimativas, desvios padrões das estimativas e p-valor
+
+```{r}
+dt_fit 
+#%>% tidy()
+
+```
+
+```{r}
+test_data_filter = test_data %>%  select(MATRIZ,
+                                #MOT_SIT_CAD,
+                                CNAE_PRINC_2DIGITOS,
+                                NATUREZA_JURIDICA,
+                                PORTE,
+                                PUBLICO_SEBRAE,
+                                CAPITAL_SOCIAL_NUMERO,
+                                SIT_CAD_SIM_NAO
+                                )
+```
+
+# Predizer categorias da target
+
+```{r}
+class_preds <- predict(dt_fit, new_data = test_data_filter,
+                       type = 'class')
+
+```
+
+# Predizer probabilidades da target
+
+```{r}
+prob_preds <- predict(dt_fit, new_data = test_data_filter, 
+                      type = 'prob')
+
+```
+
+# Juntando teste e resultados
+
+```{r}
+model_results <- test_data %>% 
+  select(SIT_CAD_SIM_NAO) %>% 
+  bind_cols(class_preds, prob_preds)
+
+```
+
+# Visualizando resultados em uma tabela
+
+```{r}
+model_results %>%
+  head()
+
+```
+
+# transformando em fator a classe
+
+```{r}
+model_results$SIT_CAD_SIM_NAO = factor(model_results$SIT_CAD_SIM_NAO)
+
+```
+
+# Criando a matriz de confusão
+
+```{r}
+conf_mat(model_results, truth = SIT_CAD_SIM_NAO,
+         estimate = .pred_class)
+
+```
+
+# calculando a acurácia
+
+```{r}
+accuracy(model_results, truth = SIT_CAD_SIM_NAO,
+         estimate = .pred_class)
+
+```
+
+# calculando a sensibilidade
+
+```{r}
+sens(model_results, truth = SIT_CAD_SIM_NAO,
+     estimate = .pred_class)
+
+```
+
+# Calculando a especificidade
+
+```{r}
+spec(model_results, truth = SIT_CAD_SIM_NAO,
+     estimate = .pred_class)
+
+```
+
+# Customizando as métricas
+
+```{r}
+resultados_metricas <- metric_set(accuracy, sens, spec)
+
+```
+
+# Calculando metricas de forma customizada
+
+```{r}
+resultados_metricas(model_results, 
+                    truth = SIT_CAD_SIM_NAO,
+                    estimate = .pred_class)
+
+```
+
+# Criando a Matriz de confusão
+
+```{r}
+conf_mat(model_results,
+         truth = SIT_CAD_SIM_NAO,
+         estimate = .pred_class) %>% 
+  summary()
+
+```
+
+# Plotando a matriz de confusão
+
+```{r}
+conf_mat(model_results,
+         truth = SIT_CAD_SIM_NAO,
+         estimate = .pred_class)  %>% 
+  # criando o heat map
+  autoplot(type = "heatmap")
+
+```
+
+# Calculando métricas usando os limiares
+
+```{r}
+threshold_df <- model_results %>% 
+  roc_curve(truth = SIT_CAD_SIM_NAO, .pred_Não )
+
+```
+
+# Visualizando os limiares
+
+```{r}
+threshold_df %>%
+  head()
+
+```
+
+# Plotando a curva ROC
+
+```{r}
+threshold_df %>% 
+  autoplot()
+
+```
+
+# Calculando a área embaixo da curva
+
+```{r}
+roc_auc(model_results, truth = SIT_CAD_SIM_NAO, .pred_Não)
+```
+
+# Criando o classificador da Floresta aleatória
+
+```{r}
+rf_model = rand_forest(mode = "classification", trees = 100) %>%
+  set_engine("ranger") %>% #,seed = 63233 
+  set_mode("classification")
+
+```
+
+# Selecionando variáveis para compor o modelo
+
+```{r}
+train_data_filter = train_data %>%  select(MATRIZ,
+                                #MOT_SIT_CAD,
+                                CNAE_PRINC_2DIGITOS,
+                                NATUREZA_JURIDICA,
+                                PORTE,
+                                PUBLICO_SEBRAE,
+                                CAPITAL_SOCIAL_NUMERO,
+                                SIT_CAD_SIM_NAO
+                                )
+```
+
+# Criando o modelo na base de treino
+
+```{r}
+rf_fit <- rf_model %>% 
+  fit(factor(SIT_CAD_SIM_NAO) ~ .,
+      data = train_data_filter)
+
+
+```
+
+# Estimativas, desvios padrões das estimativas e p-valor
+
+```{r}
+#rf_fit %>% tidy()
+
+```
+
+```{r}
+test_data_filter = test_data %>%  select(MATRIZ,
+                                #MOT_SIT_CAD,
+                                CNAE_PRINC_2DIGITOS,
+                                NATUREZA_JURIDICA,
+                                PORTE,
+                                PUBLICO_SEBRAE,
+                                CAPITAL_SOCIAL_NUMERO,
+                                SIT_CAD_SIM_NAO
+                                )
+```
+
+# Predizer categorias da target
+
+```{r}
+class_preds <- predict(rf_fit, new_data = test_data_filter,
+                       type = 'class')
+
+```
+
+# Predizer probabilidades da target
+
+```{r}
+prob_preds <- predict(rf_fit, new_data = test_data_filter, 
+                      type = 'prob')
+
+```
+
+# Juntando teste e resultados
+
+```{r}
+model_results <- test_data %>% 
+  select(SIT_CAD_SIM_NAO) %>% 
+  bind_cols(class_preds, prob_preds)
+
+```
+
+# Visualizando resultados em uma tabela
+
+```{r}
+model_results %>%
+  head()
+
+```
+
+# transformando em fator a classe
+
+```{r}
+model_results$SIT_CAD_SIM_NAO = factor(model_results$SIT_CAD_SIM_NAO)
+
+```
+
+# Criando a matriz de confusão
+
+```{r}
+conf_mat(model_results, truth = SIT_CAD_SIM_NAO,
+         estimate = .pred_class)
+
+```
+
+# calculando a acurácia
+
+```{r}
+accuracy(model_results, truth = SIT_CAD_SIM_NAO,
+         estimate = .pred_class)
+
+```
+
+# calculando a sensibilidade
+
+```{r}
+sens(model_results, truth = SIT_CAD_SIM_NAO,
+     estimate = .pred_class)
+
+```
+
+# Calculando a especificidade
+
+```{r}
+spec(model_results, truth = SIT_CAD_SIM_NAO,
+     estimate = .pred_class)
+
+```
+
+# Customizando as métricas
+
+```{r}
+resultados_metricas <- metric_set(accuracy, sens, spec)
+
+```
+
+# Calculando metricas de forma customizada
+
+```{r}
+resultados_metricas(model_results, 
+                    truth = SIT_CAD_SIM_NAO,
+                    estimate = .pred_class)
+
+```
+
+# Criando a Matriz de confusão
+
+```{r}
+conf_mat(model_results,
+         truth = SIT_CAD_SIM_NAO,
+         estimate = .pred_class) %>% 
+  summary()
+
+```
+
+# Plotando a matriz de confusão
+
+```{r}
+conf_mat(model_results,
+         truth = SIT_CAD_SIM_NAO,
+         estimate = .pred_class)  %>% 
+  # criando o heat map
+  autoplot(type = "heatmap")
+
+```
+
+# Calculando métricas usando os limiares
+
+```{r}
+threshold_df <- model_results %>% 
+  roc_curve(truth = SIT_CAD_SIM_NAO, .pred_Não )
+
+```
+
+# Visualizando os limiares
+
+```{r}
+threshold_df %>%
+  head()
+
+```
+
+# Plotando a curva ROC
+
+```{r}
+threshold_df %>% 
+  autoplot()
+
+```
+
+# Calculando a área embaixo da curva
+
+```{r}
+roc_auc(model_results, truth = SIT_CAD_SIM_NAO, .pred_Não)
+```
+# Criando o classificador dos k vizinhos mais próximos (knn)
+
+```{r}
+knn_model = nearest_neighbor(neighbors = 5) %>%
+  set_engine("kknn") %>% #,seed = 63233 
+  set_mode("classification") #%>%
+
+```
+
+# Selecionando variáveis para compor o modelo
+
+```{r}
+train_data_filter = train_data %>%  select(MATRIZ,
+                                #MOT_SIT_CAD,
+                                CNAE_PRINC_2DIGITOS,
+                                NATUREZA_JURIDICA,
+                                PORTE,
+                                PUBLICO_SEBRAE,
+                                CAPITAL_SOCIAL_NUMERO,
+                                SIT_CAD_SIM_NAO
+                                )
+```
+
+# Criando o modelo na base de treino
+
+```{r}
+
+knn_fit <- knn_model %>% 
+  fit(factor(SIT_CAD_SIM_NAO) ~ .,
+      data = train_data_filter)
+
+
+```
+
+# Estimativas, desvios padrões das estimativas e p-valor
+
+```{r}
+#rf_fit %>% tidy()
+
+```
+
+```{r}
+test_data_filter = test_data %>%  select(MATRIZ,
+                                #MOT_SIT_CAD,
+                                CNAE_PRINC_2DIGITOS,
+                                NATUREZA_JURIDICA,
+                                PORTE,
+                                PUBLICO_SEBRAE,
+                                CAPITAL_SOCIAL_NUMERO,
+                                SIT_CAD_SIM_NAO
+                                )
+```
+
+# Predizer categorias da target
+
+```{r}
+class_preds <- predict(knn_fit, new_data = test_data_filter,
+                       type = 'class')
+
+```
+
+# Predizer probabilidades da target
+
+```{r}
+prob_preds <- predict(knn_fit, new_data = test_data_filter, 
+                      type = 'prob')
+
+```
+
+# Juntando teste e resultados
+
+```{r}
+model_results <- test_data %>% 
+  select(SIT_CAD_SIM_NAO) %>% 
+  bind_cols(class_preds, prob_preds)
+
+```
+
+# Visualizando resultados em uma tabela
+
+```{r}
+model_results %>%
+  head()
+
+```
+
+# transformando em fator a classe
+
+```{r}
+model_results$SIT_CAD_SIM_NAO = factor(model_results$SIT_CAD_SIM_NAO)
+
+```
+
+# Criando a matriz de confusão
+
+```{r}
+conf_mat(model_results, truth = SIT_CAD_SIM_NAO,
+         estimate = .pred_class)
+
+```
+
+# calculando a acurácia
+
+```{r}
+accuracy(model_results, truth = SIT_CAD_SIM_NAO,
+         estimate = .pred_class)
+
+```
+
+# calculando a sensibilidade
+
+```{r}
+sens(model_results, truth = SIT_CAD_SIM_NAO,
+     estimate = .pred_class)
+
+```
+
+# Calculando a especificidade
+
+```{r}
+spec(model_results, truth = SIT_CAD_SIM_NAO,
+     estimate = .pred_class)
+
+```
+
+# Customizando as métricas
+
+```{r}
+resultados_metricas <- metric_set(accuracy, sens, spec)
+
+```
+
+# Calculando metricas de forma customizada
+
+```{r}
+resultados_metricas(model_results, 
+                    truth = SIT_CAD_SIM_NAO,
+                    estimate = .pred_class)
+
+```
+
+# Criando a Matriz de confusão
+
+```{r}
+conf_mat(model_results,
+         truth = SIT_CAD_SIM_NAO,
+         estimate = .pred_class) %>% 
+  summary()
+
+```
+
+# Plotando a matriz de confusão
+
+```{r}
+conf_mat(model_results,
+         truth = SIT_CAD_SIM_NAO,
+         estimate = .pred_class)  %>% 
+  # criando o heat map
+  autoplot(type = "heatmap")
+
+```
+
+# Calculando métricas usando os limiares
+
+```{r}
+threshold_df <- model_results %>% 
+  roc_curve(truth = SIT_CAD_SIM_NAO, .pred_Não )
+
+```
+
+# Visualizando os limiares
+
+```{r}
+threshold_df %>%
+  head()
+
+```
+
+# Plotando a curva ROC
+
+```{r}
+threshold_df %>% 
+  autoplot()
+
+```
+
+# Calculando a área embaixo da curva
+
+```{r}
+roc_auc(model_results, truth = SIT_CAD_SIM_NAO, .pred_Não)
+```
+
+# Criando o classificador dos Gradient boosting
+
+```{r}
+gb_model = boost_tree(mode = "classification", trees = 100) %>%
+  set_engine("xgboost") %>% #,seed = 63233 
+  set_mode("classification") #%>%
+
+```
+
+# Selecionando variáveis para compor o modelo
+
+```{r}
+train_data_filter = train_data %>%  select(MATRIZ,
+                                #MOT_SIT_CAD,
+                                CNAE_PRINC_2DIGITOS,
+                                NATUREZA_JURIDICA,
+                                PORTE,
+                                PUBLICO_SEBRAE,
+                                CAPITAL_SOCIAL_NUMERO,
+                                SIT_CAD_SIM_NAO
+                                )
+```
+
+# Criando o modelo na base de treino
+
+```{r}
+gb_fit <- gb_model %>% 
+  fit(factor(SIT_CAD_SIM_NAO) ~ .,
+      data = train_data_filter)
+```
+
+# Estimativas, desvios padrões das estimativas e p-valor
+
+```{r}
+#rf_fit %>% tidy()
+
+```
+
+```{r}
+test_data_filter = test_data %>%  select(MATRIZ,
+                                #MOT_SIT_CAD,
+                                CNAE_PRINC_2DIGITOS,
+                                NATUREZA_JURIDICA,
+                                PORTE,
+                                PUBLICO_SEBRAE,
+                                CAPITAL_SOCIAL_NUMERO,
+                                SIT_CAD_SIM_NAO
+                                )
+```
+
+# Predizer categorias da target
+
+```{r}
+class_preds <- predict(gb_fit, new_data = test_data_filter,
+                       type = 'class')
+
+```
+
+# Predizer probabilidades da target
+
+```{r}
+prob_preds <- predict(gb_fit, new_data = test_data_filter, 
+                      type = 'prob')
+
+```
+
+# Juntando teste e resultados
+
+```{r}
+model_results <- test_data %>% 
+  select(SIT_CAD_SIM_NAO) %>% 
+  bind_cols(class_preds, prob_preds)
+
+```
+
+# Visualizando resultados em uma tabela
+
+```{r}
+model_results %>%
+  head()
+
+```
+
+# transformando em fator a classe
+
+```{r}
+model_results$SIT_CAD_SIM_NAO = factor(model_results$SIT_CAD_SIM_NAO)
+
+```
+
+# Criando a matriz de confusão
+
+```{r}
+conf_mat(model_results, truth = SIT_CAD_SIM_NAO,
+         estimate = .pred_class)
+
+```
+
+# calculando a acurácia
+
+```{r}
+accuracy(model_results, truth = SIT_CAD_SIM_NAO,
+         estimate = .pred_class)
+
+```
+
+# calculando a sensibilidade
+
+```{r}
+sens(model_results, truth = SIT_CAD_SIM_NAO,
+     estimate = .pred_class)
+
+```
+
+# Calculando a especificidade
+
+```{r}
+spec(model_results, truth = SIT_CAD_SIM_NAO,
+     estimate = .pred_class)
+
+```
+
+# Customizando as métricas
+
+```{r}
+resultados_metricas <- metric_set(accuracy, sens, spec)
+
+```
+
+# Calculando metricas de forma customizada
+
+```{r}
+resultados_metricas(model_results, 
+                    truth = SIT_CAD_SIM_NAO,
+                    estimate = .pred_class)
+
+```
+
+# Criando a Matriz de confusão
+
+```{r}
+conf_mat(model_results,
+         truth = SIT_CAD_SIM_NAO,
+         estimate = .pred_class) %>% 
+  summary()
+
+```
+
+# Plotando a matriz de confusão
+
+```{r}
+conf_mat(model_results,
+         truth = SIT_CAD_SIM_NAO,
+         estimate = .pred_class)  %>% 
+  # criando o heat map
+  autoplot(type = "heatmap")
+
+```
+
+# Calculando métricas usando os limiares
+
+```{r}
+threshold_df <- model_results %>% 
+  roc_curve(truth = SIT_CAD_SIM_NAO, .pred_Não )
+
+```
+
+# Visualizando os limiares
+
+```{r}
+threshold_df %>%
+  head()
+
+```
+
+# Plotando a curva ROC
+
+```{r}
+threshold_df %>% 
+  autoplot()
+
+```
+
+# Calculando a área embaixo da curva
+
+```{r}
+roc_auc(model_results, truth = SIT_CAD_SIM_NAO, .pred_Não)
+```
+
+
+
+
+
+
+
+
+
+
